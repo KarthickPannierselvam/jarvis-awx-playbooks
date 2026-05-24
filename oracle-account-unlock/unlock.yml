@@ -1,9 +1,8 @@
 ---
-# Oracle Account Unlock Playbook
-# Runs on target host as the SSH credential user (sudo -u oracle internally).
-# Variables (can be overridden via AWX Survey or extra_vars):
-#   oracle_sid  — Oracle SID to connect to  (default: ALP611T)
-#   username    — Oracle DB username to unlock (default: REMOTE_SCHEDULER_AGENT)
+# Oracle Account Unlock Playbook v2
+# Connects as oracle OS user (AWX credential id=3) and runs sqlplus via OS auth.
+# Sets Oracle env directly from Ansible variables — no login shell / dbset needed.
+# This avoids bash -l startup banner contaminating stdout.
 
 - name: Oracle Account Unlock
   hosts: all
@@ -11,6 +10,7 @@
 
   vars:
     oracle_sid: "ALP611T"
+    oracle_home: "/ora/product/19.29.0.0/db"
     username: "REMOTE_SCHEDULER_AGENT"
     protected_accounts: "'SYS','SYSTEM','DBSNMP','SYSMAN','BSBDEPLOY','SKYVAULT_REC','SKYUTILS','SKY_SCANNER','CAPACITY'"
 
@@ -19,27 +19,29 @@
     # ── OBSERVE 1.1 — Does the account exist? ──────────────────────────────
     - name: "1.1 OBSERVE - Check account exists in dba_users"
       ansible.builtin.shell: |
-        bash -l -c '. dbset {{ oracle_sid }}; echo "
-          SET PAGESIZE 0 HEADING OFF FEEDBACK OFF VERIFY OFF TRIMSPOOL ON;
-          SELECT username FROM dba_users WHERE username=UPPER('"'"'{{ username }}'"'"');
-          EXIT;
-        " | $ORACLE_HOME/bin/sqlplus -s / as sysdba'
+        export ORACLE_HOME="{{ oracle_home }}"
+        export ORACLE_SID="{{ oracle_sid }}"
+        export PATH="$ORACLE_HOME/bin:$PATH"
+        export LD_LIBRARY_PATH="$ORACLE_HOME/lib:$LD_LIBRARY_PATH"
+        printf "SET PAGESIZE 0 HEADING OFF FEEDBACK OFF VERIFY OFF TRIMSPOOL ON\nSELECT username FROM dba_users WHERE username=UPPER('%s');\nEXIT;\n" "{{ username }}" \
+          | sqlplus -s / as sysdba
       register: check_exists
       changed_when: false
 
     - name: "1.1 VALIDATE - Account must exist"
       ansible.builtin.fail:
         msg: "USER_NOT_FOUND — {{ username }} does not exist in dba_users on {{ oracle_sid }}"
-      when: username not in check_exists.stdout
+      when: (username | upper) not in (check_exists.stdout | upper)
 
     # ── OBSERVE 1.2 — Is the account locked? ───────────────────────────────
     - name: "1.2 OBSERVE - Check account status"
       ansible.builtin.shell: |
-        bash -l -c '. dbset {{ oracle_sid }}; echo "
-          SET PAGESIZE 0 HEADING OFF FEEDBACK OFF VERIFY OFF TRIMSPOOL ON;
-          SELECT account_status FROM dba_users WHERE username=UPPER('"'"'{{ username }}'"'"');
-          EXIT;
-        " | $ORACLE_HOME/bin/sqlplus -s / as sysdba'
+        export ORACLE_HOME="{{ oracle_home }}"
+        export ORACLE_SID="{{ oracle_sid }}"
+        export PATH="$ORACLE_HOME/bin:$PATH"
+        export LD_LIBRARY_PATH="$ORACLE_HOME/lib:$LD_LIBRARY_PATH"
+        printf "SET PAGESIZE 0 HEADING OFF FEEDBACK OFF VERIFY OFF TRIMSPOOL ON\nSELECT account_status FROM dba_users WHERE username=UPPER('%s');\nEXIT;\n" "{{ username }}" \
+          | sqlplus -s / as sysdba
       register: check_status
       changed_when: false
 
@@ -51,46 +53,52 @@
     # ── THINK 1.3 — Protected account check ────────────────────────────────
     - name: "1.3 THINK - Check account is not a protected system account"
       ansible.builtin.shell: |
-        bash -l -c '. dbset {{ oracle_sid }}; echo "
-          SET PAGESIZE 0 HEADING OFF FEEDBACK OFF VERIFY OFF TRIMSPOOL ON;
-          SELECT COUNT(*) FROM dual
-          WHERE UPPER('"'"'{{ username }}'"'"') IN ({{ protected_accounts }});
-          EXIT;
-        " | $ORACLE_HOME/bin/sqlplus -s / as sysdba'
+        export ORACLE_HOME="{{ oracle_home }}"
+        export ORACLE_SID="{{ oracle_sid }}"
+        export PATH="$ORACLE_HOME/bin:$PATH"
+        export LD_LIBRARY_PATH="$ORACLE_HOME/lib:$LD_LIBRARY_PATH"
+        printf "SET PAGESIZE 0 HEADING OFF FEEDBACK OFF VERIFY OFF TRIMSPOOL ON\nSELECT COUNT(*) FROM dual WHERE UPPER('%s') IN ({{ protected_accounts }});\nEXIT;\n" "{{ username }}" \
+          | sqlplus -s / as sysdba \
+          | grep -E '^[[:space:]]*[0-9]+[[:space:]]*$' \
+          | tail -1 \
+          | tr -d ' '
       register: check_protected
       changed_when: false
 
     - name: "1.3 VALIDATE - Must not be a protected account"
       ansible.builtin.fail:
         msg: "PROTECTED_ACCOUNT — {{ username }} is a protected system/schema account. Self-service unlock blocked."
-      when: "'1' in check_protected.stdout"
+      when: check_protected.stdout | trim != '0'
 
     # ── ACT 2.1 — Unlock the account ───────────────────────────────────────
-    - name: "2.1 ACT - ALTER USER ACCOUNT UNLOCK"
+    - name: "2.1 ACT - Unlock account"
       ansible.builtin.shell: |
-        bash -l -c '. dbset {{ oracle_sid }}; echo "
-          SET PAGESIZE 0 HEADING OFF FEEDBACK OFF VERIFY OFF;
-          ALTER USER {{ username }} ACCOUNT UNLOCK;
-          EXIT;
-        " | $ORACLE_HOME/bin/sqlplus -s / as sysdba'
+        export ORACLE_HOME="{{ oracle_home }}"
+        export ORACLE_SID="{{ oracle_sid }}"
+        export PATH="$ORACLE_HOME/bin:$PATH"
+        export LD_LIBRARY_PATH="$ORACLE_HOME/lib:$LD_LIBRARY_PATH"
+        printf "SET PAGESIZE 0 HEADING OFF FEEDBACK OFF VERIFY OFF\nALTER USER %s ACCOUNT UNLOCK;\nEXIT;\n" "{{ username }}" \
+          | sqlplus -s / as sysdba
       register: unlock_result
+      changed_when: true
 
-    # ── VERIFY 3.1 — Confirm account is OPEN ───────────────────────────────
-    - name: "3.1 VERIFY - Confirm account status is OPEN"
+    # ── VERIFY 3.1 — Confirm OPEN ──────────────────────────────────────────
+    - name: "3.1 VERIFY - Confirm account is now OPEN"
       ansible.builtin.shell: |
-        bash -l -c '. dbset {{ oracle_sid }}; echo "
-          SET PAGESIZE 0 HEADING OFF FEEDBACK OFF VERIFY OFF TRIMSPOOL ON;
-          SELECT account_status FROM dba_users WHERE username=UPPER('"'"'{{ username }}'"'"');
-          EXIT;
-        " | $ORACLE_HOME/bin/sqlplus -s / as sysdba'
+        export ORACLE_HOME="{{ oracle_home }}"
+        export ORACLE_SID="{{ oracle_sid }}"
+        export PATH="$ORACLE_HOME/bin:$PATH"
+        export LD_LIBRARY_PATH="$ORACLE_HOME/lib:$LD_LIBRARY_PATH"
+        printf "SET PAGESIZE 0 HEADING OFF FEEDBACK OFF VERIFY OFF TRIMSPOOL ON\nSELECT account_status FROM dba_users WHERE username=UPPER('%s');\nEXIT;\n" "{{ username }}" \
+          | sqlplus -s / as sysdba
       register: verify_status
       changed_when: false
 
-    - name: "3.1 VALIDATE - Account must now be OPEN"
+    - name: "3.1 VALIDATE - Account must be OPEN"
       ansible.builtin.fail:
-        msg: "POST_VERIFY_FAILED — {{ username }} status is '{{ verify_status.stdout | trim }}' after unlock. Escalate to DBA."
-      when: "'OPEN' not in verify_status.stdout"
+        msg: "POST_VERIFY_FAILED — {{ username }} status is '{{ verify_status.stdout | trim }}' after unlock."
+      when: "'{{ healthy_status }}' not in verify_status.stdout"
 
-    - name: "SUCCESS - Account is now OPEN"
+    - name: "RESULT - Account unlock complete"
       ansible.builtin.debug:
-        msg: "{{ username }} on {{ oracle_sid }} is now OPEN. Unlock successful."
+        msg: "SUCCESS — {{ username }} on {{ oracle_sid }} ({{ inventory_hostname }}) account_status={{ verify_status.stdout | trim }}"
