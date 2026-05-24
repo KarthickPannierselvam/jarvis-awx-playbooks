@@ -19,7 +19,7 @@
     # ── OBSERVE 1.1 — Does the account exist? ──────────────────────────────
     - name: "1.1 OBSERVE - Check account exists in dba_users"
       ansible.builtin.shell: |
-        sudo su - oracle -c '. dbset {{ oracle_sid }}; echo "
+        bash -l -c '. dbset {{ oracle_sid }}; echo "
           SET PAGESIZE 0 HEADING OFF FEEDBACK OFF VERIFY OFF TRIMSPOOL ON;
           SELECT username FROM dba_users WHERE username=UPPER('"'"'{{ username }}'"'"');
           EXIT;
@@ -35,7 +35,7 @@
     # ── OBSERVE 1.2 — Is the account locked? ───────────────────────────────
     - name: "1.2 OBSERVE - Check account status"
       ansible.builtin.shell: |
-        sudo su - oracle -c '. dbset {{ oracle_sid }}; echo "
+        bash -l -c '. dbset {{ oracle_sid }}; echo "
           SET PAGESIZE 0 HEADING OFF FEEDBACK OFF VERIFY OFF TRIMSPOOL ON;
           SELECT account_status FROM dba_users WHERE username=UPPER('"'"'{{ username }}'"'"');
           EXIT;
@@ -51,7 +51,7 @@
     # ── THINK 1.3 — Protected account check ────────────────────────────────
     - name: "1.3 THINK - Check account is not a protected system account"
       ansible.builtin.shell: |
-        sudo su - oracle -c '. dbset {{ oracle_sid }}; echo "
+        bash -l -c '. dbset {{ oracle_sid }}; echo "
           SET PAGESIZE 0 HEADING OFF FEEDBACK OFF VERIFY OFF TRIMSPOOL ON;
           SELECT COUNT(*) FROM dual
           WHERE UPPER('"'"'{{ username }}'"'"') IN ({{ protected_accounts }});
@@ -68,7 +68,7 @@
     # ── ACT 2.1 — Unlock the account ───────────────────────────────────────
     - name: "2.1 ACT - ALTER USER ACCOUNT UNLOCK"
       ansible.builtin.shell: |
-        sudo su - oracle -c '. dbset {{ oracle_sid }}; echo "
+        bash -l -c '. dbset {{ oracle_sid }}; echo "
           SET PAGESIZE 0 HEADING OFF FEEDBACK OFF VERIFY OFF;
           ALTER USER {{ username }} ACCOUNT UNLOCK;
           EXIT;
@@ -78,7 +78,7 @@
     # ── VERIFY 3.1 — Confirm account is OPEN ───────────────────────────────
     - name: "3.1 VERIFY - Confirm account status is OPEN"
       ansible.builtin.shell: |
-        sudo su - oracle -c '. dbset {{ oracle_sid }}; echo "
+        bash -l -c '. dbset {{ oracle_sid }}; echo "
           SET PAGESIZE 0 HEADING OFF FEEDBACK OFF VERIFY OFF TRIMSPOOL ON;
           SELECT account_status FROM dba_users WHERE username=UPPER('"'"'{{ username }}'"'"');
           EXIT;
