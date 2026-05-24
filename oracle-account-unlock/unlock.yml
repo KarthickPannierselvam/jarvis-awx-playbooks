@@ -97,7 +97,7 @@
     - name: "3.1 VALIDATE - Account must be OPEN"
       ansible.builtin.fail:
         msg: "POST_VERIFY_FAILED — {{ username }} status is '{{ verify_status.stdout | trim }}' after unlock."
-      when: "'{{ healthy_status }}' not in verify_status.stdout"
+      when: healthy_status not in verify_status.stdout
 
     - name: "RESULT - Account unlock complete"
       ansible.builtin.debug:
